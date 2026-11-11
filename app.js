@@ -1,3 +1,5 @@
+import {APP_VERSION} from './version.js';
+import {initRowMenus} from './row-menus.js';
 import {initInstall} from './install.js';
 import {initBulk} from './bulk.js';
 import {initPrint} from './print.js';
@@ -8,6 +10,8 @@ import {api, pdfURL, backup, restore} from './storage.js';
 import {notice, ask, openHelp} from './dialogs.js';
 'use strict';
 const $=s=>document.querySelector(s), esc=s=>String(s??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+$('#appVersionFooter').textContent='v'+APP_VERSION;
+initRowMenus();
 let records=[],current={},busy=false,service=true,reg,objectURL;
 const specs=[['name','Product name','text',true],['supplier','Supplier / manufacturer','text'],['code','Catalogue / product number','text'],['concentration','Concentration / formulation','text'],['cas','CAS number(s)','text'],['lab','Location','text'],['revision','SDS issue / revision date','date'],['review','Review due date','date'],['expiry','Explicit expiry date (optional)','date']];
 $('#inputs').innerHTML=specs.map(([n,l,t,required])=>`<label>${l}<input name="${n}" type="${t}" ${required?'required':''}></label>`).join('');
