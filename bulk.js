@@ -1,9 +1,10 @@
+import {suggestedReviewDate} from './dates.js';
 import {api} from './storage.js';
 import {ask,notice} from './dialogs.js';
 export function initBulk({getRecords,getVisible,load,isBusy,setBusy,getImportLocation}){
  const $=s=>document.querySelector(s),selected=new Set();
  const toolbar=document.createElement('div');toolbar.className='bulk-toolbar';toolbar.hidden=true;
- toolbar.innerHTML='<strong id="selectionCount" aria-live="polite"></strong><button id="bulkEdit">Edit selected</button><button id="bulkTrash" class="danger">Move to Trash</button><button id="bulkRestore">Restore selected</button><button id="clearSelection">Clear selection</button>';
+ toolbar.innerHTML='<strong id="selectionCount" aria-live="polite"></strong><button id="bulkEdit">Edit selected</button><button id="bulkReview" hidden>Set missing review dates</button><button id="bulkTrash" class="danger">Move to Trash</button><button id="bulkRestore">Restore selected</button><button id="clearSelection">Clear selection</button>';
  $('.tablewrap').before(toolbar);
  const heading=document.querySelector('thead th');heading.insertAdjacentHTML('afterbegin','<input id="selectAll" type="checkbox" aria-label="Select all records on this page"> ');
  const importer=document.createElement('button');importer.textContent='Bulk import';$('#add').before(importer);
@@ -15,7 +16,7 @@ export function initBulk({getRecords,getVisible,load,isBusy,setBusy,getImportLoc
  function update(){
   const visible=getVisible(),ids=new Set(visible.map(r=>r.id));for(const id of selected)if(!ids.has(id))selected.delete(id);
   const rows=[...$('#rows').children];for(const row of rows){const id=row.querySelector('[data-id],[data-restore]')?.dataset;const key=id?.id||id?.restore;if(!key)continue;let box=row.querySelector('[data-select]');if(!box){box=document.createElement('input');box.type='checkbox';box.dataset.select=key;box.setAttribute('aria-label','Select '+(visible.find(r=>r.id===key)?.name||'record'));row.firstElementChild.prepend(box)}box.checked=selected.has(key);row.classList.toggle('bulk-selected',box.checked)}
-  toolbar.hidden=!selected.size;$('#selectionCount').textContent=`${selected.size} selected`;const trash=$('#filter').value==='trash';$('#bulkEdit').hidden=$('#bulkTrash').hidden=trash;$('#bulkRestore').hidden=!trash;
+  toolbar.hidden=!selected.size;$('#selectionCount').textContent=`${selected.size} selected`;const trash=$('#filter').value==='trash';$('#bulkEdit').hidden=$('#bulkTrash').hidden=trash;$('#bulkRestore').hidden=!trash;$('#bulkReview').hidden=trash||!visible.some(r=>selected.has(r.id)&&!r.review&&!r._conflict&&suggestedReviewDate(r.revision));
   const all=$('#selectAll');all.checked=!!visible.length&&selected.size===visible.length;all.indeterminate=selected.size>0&&selected.size<visible.length;all.disabled=!visible.length||isBusy();
  }
  $('#rows').addEventListener('change',e=>{if(e.target.dataset.select){e.target.checked?selected.add(e.target.dataset.select):selected.delete(e.target.dataset.select);update()}});
@@ -23,6 +24,14 @@ export function initBulk({getRecords,getVisible,load,isBusy,setBusy,getImportLoc
  async function run(rows,operation){setBusy(true);let count=0;const errors=[];try{for(const r of rows){try{await operation(r);selected.delete(r.id);count++}catch(e){errors.push(`${r.name}: ${e.message}`)}}await load()}finally{setBusy(false);update()}await notice(`${count} of ${rows.length} records updated.`+(errors.length?'\n'+errors.join('\n'):''))}
  function chosen(){return getVisible().filter(r=>selected.has(r.id)).map(r=>structuredClone(r))}
  async function move(restore){if(isBusy())return;const rows=chosen();if(!rows.length||!await ask(`${restore?'Restore':'Move to Trash'} ${rows.length} selected records? PDFs and history are retained.`))return;await run(rows,r=>api(restore?'/api/untrash':'/api/trash',{method:'POST',body:JSON.stringify({id:r.id,updated:r.updated,_heads:r._heads})}))}
+ $('#bulkReview').onclick=async()=>{
+  if(isBusy())return;
+  const selectedRows=chosen(),eligible=selectedRows.filter(r=>!r.deletedAt&&!r._conflict&&!r.review&&suggestedReviewDate(r.revision));
+  if(!eligible.length)return;
+  if(!await ask(`Set suggested five-year review dates for ${eligible.length} of ${selectedRows.length} selected record(s), based on each SDS revision date? Existing review dates are kept. Records without a valid revision date or with conflicting edits are skipped. Check whether an earlier review is needed.`))return;
+  if(isBusy())return;
+  await run(eligible,r=>api('/api/save',{method:'POST',body:JSON.stringify({...r,review:suggestedReviewDate(r.revision)})}));
+ };
  $('#bulkTrash').onclick=()=>move(false);$('#bulkRestore').onclick=()=>move(true);
  $('#bulkEdit').onclick=()=>{if(isBusy())return;targets=chosen();if(!targets.length)return;if(targets.some(r=>r._conflict))return notice('Resolve conflicting edits individually before bulk editing these records.');$('#bulkForm').reset();dialog.querySelectorAll('[name]').forEach(i=>i.disabled=true);$('#bulkError').textContent='';$('#bulkTarget').textContent=`Changes apply to ${targets.length} selected records.`;dialog.showModal()};
  $('#bulkClose').onclick=$('#bulkCancel').onclick=()=>dialog.close();dialog.onchange=e=>{if(e.target.dataset.field)$('#bulkForm').elements[e.target.dataset.field].disabled=!e.target.checked};
@@ -63,7 +72,7 @@ export function initBulk({getRecords,getVisible,load,isBusy,setBusy,getImportLoc
    importer.textContent=`Importing ${i+1} / ${files.length}…`;setStatus(`Importing ${i+1} of ${files.length}: ${file.name}`);
    try{if(!/\.pdf$/i.test(file.name)&&file.type!=='application/pdf')throw Error('Please choose a PDF.');if(file.size>30*1024*1024)throw Error('PDF exceeds 30 MB.');
     const d=await api('/api/import',{method:'POST',body:file});if(known.has(d.file)){skipped++;continue}
-    await api('/api/save',{method:'POST',body:JSON.stringify({...d.fields,name:d.fields.name?.trim()||file.name.replace(/\.pdf$/i,''),file:d.file,lab:getImportLocation(),notes:'Bulk import: verify extracted details against the original PDF.'+(d.warnings.length?'\n'+d.warnings.join('\n'):'' )})});known.add(d.file);added++;
+    await api('/api/save',{method:'POST',body:JSON.stringify({...d.fields,review:d.fields.review||suggestedReviewDate(d.fields.revision),name:d.fields.name?.trim()||file.name.replace(/\.pdf$/i,''),file:d.file,lab:getImportLocation(),notes:'Bulk import: verify extracted details against the original PDF. Any review date suggested from the revision date is five years later; adjust where an earlier review is needed.'+(d.warnings.length?'\n'+d.warnings.join('\n'):'' )})});known.add(d.file);added++;
    }catch(e){errors.push(`${file.name}: ${e.message}`)}
   }await load();setStatus(`Imported ${added}; skipped ${skipped} duplicate(s); failed ${errors.length}. Review each imported record against its PDF.`+(errors.length?'\n'+errors.join('\n'):''));
   }catch(e){setStatus(`Import stopped: ${e.message}. ${added} record(s) were saved. Check the library before retrying.`)}
