@@ -90,7 +90,8 @@ async function refreshFolderUI(){
  $('#folderCheckStatus').hidden=!state.configured;$('#folderCheckStatus').textContent=lastFolderCheck;
  if(!state.configured)await refreshPersistenceUI();
 }
-$('#settingsOpen').onclick=async()=>{updateNotifications();$('#settings').showModal();await refreshFolderUI()};$('#settingsClose').onclick=$('#settingsDone').onclick=()=>$('#settings').close();
+async function openStorageSettings(showGuide=false){updateNotifications();if(!$('#settings').open)$('#settings').showModal();await refreshFolderUI();if(showGuide){$('#storageChoiceGuide').open=true;$('#storageChoiceGuide').scrollIntoView({block:'nearest'});$('#storageChoiceGuide summary').focus({preventScroll:true})}}
+$('#settingsOpen').onclick=()=>openStorageSettings();$('#storageChoiceHelp').onclick=()=>openStorageSettings(true);$('#settingsClose').onclick=$('#settingsDone').onclick=()=>$('#settings').close();
 function backupStatus(){const saved=localStorage.getItem('sds-last-backup');$('#lastBackup').textContent=saved?'Last backup downloaded: '+new Date(saved).toLocaleString():'No backup downloaded yet'}backupStatus();
 
 $('#connectFolder').onclick=async()=>{
