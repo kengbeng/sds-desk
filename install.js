@@ -2,6 +2,25 @@ import {APP_VERSION,RELEASE_LABEL} from './version.js';
 export function initInstall({isUnsafe,setRegistration}){
  const $=s=>document.querySelector(s),button=$('#install');
  let registration,promptEvent,checking=false,applying=false,downloadFailed=false,installationObserved=false,pendingReload=false,refreshing=false;
+ let pendingWorker=null,pendingVersion=null;
+ function isNewRelease(){
+  if(!registration?.waiting||registration.waiting!==pendingWorker||!pendingVersion)return false;
+  const next=pendingVersion.split('.').map(Number),current=APP_VERSION.split('.').map(Number);
+  for(let i=0;i<3;i++){if(next[i]!==current[i])return next[i]>current[i]}return false;
+ }
+ async function inspectPendingVersion(){
+  const worker=registration?.waiting;
+  if(!worker){pendingWorker=null;pendingVersion=null;updateUI();return}
+  if(worker!==pendingWorker||!pendingVersion){
+   pendingWorker=worker;pendingVersion=null;updateUI();
+   const version=await new Promise(resolve=>{const channel=new MessageChannel(),timer=setTimeout(()=>{channel.port1.close();resolve(null)},1000);channel.port1.onmessage=e=>{clearTimeout(timer);channel.port1.close();resolve(e.data?.release)};try{worker.postMessage({type:'APP_RELEASE'},[channel.port2])}catch{clearTimeout(timer);channel.port1.close();resolve(null)}});
+   if(registration?.waiting!==worker)return;
+   if(typeof version==='string'&&/^\d+\.\d+\.\d+$/.test(version))pendingVersion=version;
+  }
+  updateUI();
+  if(!applying)message(pendingVersionMessage());
+ }
+ function pendingVersionMessage(){return isNewRelease()?`Version ${pendingVersion} is ready. Choose Update and reload.`:registration?.waiting&&!pendingVersion?'The downloaded app version could not be confirmed. Keep using this version and check again while online.':`Version ${APP_VERSION} is up to date.`}
  const standalone=()=>matchMedia('(display-mode: standalone)').matches||matchMedia('(display-mode: window-controls-overlay)').matches||navigator.standalone===true;
  const installed=()=>installationObserved||standalone();
  const dialog=document.createElement('dialog');dialog.id='installedStatus';dialog.setAttribute('aria-labelledby','installedTitle');
@@ -9,7 +28,7 @@ export function initInstall({isUnsafe,setRegistration}){
  document.body.append(dialog);$('#appVersion').textContent=`Version ${APP_VERSION} · Updated ${RELEASE_LABEL}`;
  const message=text=>{$('#installedMessage').textContent=text};
  function updateUI(){
-  const waiting=!!registration?.waiting,downloading=!!registration?.installing;
+  const waiting=isNewRelease(),downloading=!!registration?.installing;
   button.textContent=applying?'Updating…':waiting?'Update available':installed()?'Installed':'Install app';button.disabled=applying;
   button.dataset.state=applying?'updating':waiting?'update':installed()?'installed':'install';
   button.classList.toggle('has-update',waiting);button.classList.toggle('is-installed',installed()&&!waiting);
@@ -23,13 +42,13 @@ export function initInstall({isUnsafe,setRegistration}){
   $('#installedUpdate').textContent=applying?'Updating…':waiting?'Update and reload':downloading?'Downloading…':checking?'Checking…':'Check for updates';
  }
  function watch(worker){if(!worker)return;message(registration?.active?'Downloading an update…':'Preparing offline app files…');updateUI();worker.addEventListener('statechange',()=>{
-   if(worker.state==='installed'){downloadFailed=false;message(registration.waiting?'A new version is ready. Choose Update and reload.':'Offline app files are ready.')}
+   if(worker.state==='installed'){downloadFailed=false;setTimeout(inspectPendingVersion,0);message('Checking the downloaded app version…')}
    if(worker.state==='redundant'){downloadFailed=true;message('The download did not complete. Check your connection and try again.')}
    updateUI();
   })}
  async function install(){if(!promptEvent)return;const event=promptEvent;promptEvent=null;updateUI();try{await event.prompt();const choice=await event.userChoice;message(choice.outcome==='accepted'?'Installation accepted. Your browser will finish installing the app.':'Installation cancelled. You can install later.')}catch(e){message('Installation could not start. Use the installation instructions.');showInfo()}updateUI()}
  async function applyUpdate(){
-  if(applying||!registration?.waiting)return;
+  if(applying||!isNewRelease())return;
   if(isUnsafe()){message('Finish the current operation and close record editors before updating.');showInfo();return}
   applying=true;message('Checking open SDS Desk windows…');updateUI();
   try{
@@ -41,11 +60,11 @@ export function initInstall({isUnsafe,setRegistration}){
  }
  $('#installedClose').onclick=$('#installedDone').onclick=()=>dialog.close();$('#installAction').onclick=install;
  function showInfo(){if(!dialog.open)dialog.showModal()}
- button.onclick=()=>{if(applying)return;if(registration?.waiting)return applyUpdate();if(promptEvent)return install();showInfo()};
+ button.onclick=()=>{if(applying)return;if(isNewRelease())return applyUpdate();if(promptEvent)return install();showInfo()};
  $('#installedUpdate').onclick=async()=>{
-  if(registration?.waiting)return applyUpdate();if(checking||applying||registration?.installing)return;
+  if(isNewRelease())return applyUpdate();if(checking||applying||registration?.installing)return;
   checking=true;downloadFailed=false;message('Checking for updates…');updateUI();
-  try{if(!registration)throw Error('Offline app support is unavailable.');if(!navigator.onLine)throw Error('You are offline. Reconnect to check for updates.');await registration.update();if(!downloadFailed)message(registration.waiting?'A new version is ready. Choose Update and reload.':registration.installing?'Downloading an update…':`Version ${APP_VERSION} is up to date.`)}catch(e){message('Update check failed. '+e.message)}finally{checking=false;updateUI()}
+  try{if(!registration)throw Error('Offline app support is unavailable.');if(!navigator.onLine)throw Error('You are offline. Reconnect to check for updates.');await registration.update();await inspectPendingVersion();if(!downloadFailed)message(registration.installing?'Downloading an update…':pendingVersionMessage())}catch(e){message('Update check failed. '+e.message)}finally{checking=false;updateUI()}
  };
  window.addEventListener('beforeinstallprompt',e=>{e.preventDefault();promptEvent=e;installationObserved=false;updateUI()});window.addEventListener('appinstalled',()=>{installationObserved=true;promptEvent=null;message('SDS Desk was installed successfully.');updateUI()});
  matchMedia('(display-mode: standalone)').addEventListener('change',updateUI);
@@ -70,6 +89,6 @@ export function initInstall({isUnsafe,setRegistration}){
  });
  function reloadWhenSafe(){if(!pendingReload||refreshing)return;if(isUnsafe()){message('An update is ready. Finish your work and close the editor; the app will then reload.');button.textContent='Update ready';return}refreshing=true;location.reload()}
  setInterval(reloadWhenSafe,1000);
- if('serviceWorker'in navigator){navigator.serviceWorker.register(new URL('./sw.js',import.meta.url),{scope:new URL('./',import.meta.url).href,updateViaCache:'none'}).then(r=>{registration=r;setRegistration(r);updateUI();if(r.waiting)message('A new version is ready. Choose Update and reload.');watch(r.installing);r.addEventListener('updatefound',()=>{downloadFailed=false;watch(r.installing)});if(navigator.onLine)r.update().catch(()=>{})}).catch(e=>{message('Offline app support is unavailable. '+e.message);updateUI()})}else message('This browser does not support offline app installation.');
+ if('serviceWorker'in navigator){navigator.serviceWorker.register(new URL('./sw.js',import.meta.url),{scope:new URL('./',import.meta.url).href,updateViaCache:'none'}).then(r=>{registration=r;setRegistration(r);updateUI();if(r.waiting)inspectPendingVersion();watch(r.installing);r.addEventListener('updatefound',()=>{downloadFailed=false;watch(r.installing)});if(navigator.onLine)r.update().catch(()=>{})}).catch(e=>{message('Offline app support is unavailable. '+e.message);updateUI()})}else message('This browser does not support offline app installation.');
  updateUI();
 }

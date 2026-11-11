@@ -5,7 +5,7 @@ export function initBulk({getRecords,getVisible,load,isBusy,setBusy,getImportLoc
  const toolbar=document.createElement('div');toolbar.className='bulk-toolbar';toolbar.hidden=true;
  toolbar.innerHTML='<strong id="selectionCount" aria-live="polite"></strong><button id="bulkEdit">Edit selected</button><button id="bulkTrash" class="danger">Move to Trash</button><button id="bulkRestore">Restore selected</button><button id="clearSelection">Clear selection</button>';
  $('.tablewrap').before(toolbar);
- const heading=document.querySelector('thead th');heading.insertAdjacentHTML('afterbegin','<input id="selectAll" type="checkbox" aria-label="Select all visible records"> ');
+ const heading=document.querySelector('thead th');heading.insertAdjacentHTML('afterbegin','<input id="selectAll" type="checkbox" aria-label="Select all records on this page"> ');
  const importer=document.createElement('button');importer.textContent='Bulk import';$('#add').before(importer);
  const picker=document.createElement('input');picker.type='file';picker.accept='.pdf,application/pdf';picker.multiple=true;picker.hidden=true;document.body.append(picker);
  const dialog=document.createElement('dialog');dialog.className='bulk-dialog';dialog.setAttribute('aria-labelledby','bulkTitle');
