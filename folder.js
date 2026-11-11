@@ -3,7 +3,7 @@ const uuid=/^[a-f0-9-]{36}$/i,pdfname=/^[a-f0-9]{64}\.pdf$/;
 const handles=new Promise((resolve,reject)=>{const q=indexedDB.open('sds-folder-settings',1);q.onupgradeneeded=()=>q.result.createObjectStore('settings');q.onsuccess=()=>resolve(q.result);q.onerror=()=>reject(q.error)});
 let folder,configured=false,loaded=false,lastWarnings=[],indexWarning='';
 async function setting(value,write=false){const db=await handles;return new Promise((resolve,reject)=>{const tx=db.transaction('settings',write?'readwrite':'readonly'),st=tx.objectStore('settings');let result;const q=write?st.put(value,'folder'):st.get('folder');q.onsuccess=()=>result=q.result;tx.oncomplete=()=>resolve(result);tx.onerror=()=>reject(tx.error)})}
-export async function folderState(){if(!loaded){folder=await setting();configured=!!folder;loaded=true}return {configured,name:folder?.name,supported:'showDirectoryPicker'in window}}
+export async function folderState({checkPermission=false}={}){if(!loaded){folder=await setting();configured=!!folder;loaded=true}let permission;if(checkPermission&&folder)try{permission=await folder.queryPermission({mode:'readwrite'})}catch{permission='unknown'}return {configured,name:folder?.name,supported:'showDirectoryPicker'in window,permission}}
 async function requireFolder(){await folderState();if(!folder)throw Error('No storage folder connected.');if(await folder.queryPermission({mode:'readwrite'})!=='granted')throw Error('Folder access needs permission. Click Reconnect folder.');return folder}
 export async function connectFolder(reconnect=false){
  if(!('showDirectoryPicker'in window))throw Error('Folder access is unavailable here. Open this app in desktop Chrome or Edge.');
