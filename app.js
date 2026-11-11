@@ -1,3 +1,4 @@
+import {initSettingsTabs,showSettingsTab} from './settings-tabs.js';
 import {initFolderTools} from './folder-tools.js';
 import {suggestedReviewDate} from './dates.js';
 import {initLibraryHealth} from './library-health.js';
@@ -8,12 +9,13 @@ import {initBulk} from './bulk.js';
 import {initPrint} from './print.js';
 import {sortRecords,sortOptions,sortDirectionLabel} from './sorting.js';
 import {initTutorial} from './tutorial.js';
-import {folderState,connectFolder,disconnectFolder,rebuildFolderIndex,organiseExistingPDFs} from './folder.js';
+import {folderState,connectFolder,disconnectFolder,rebuildFolderIndex} from './folder.js';
 import {api, pdfURL, backup, restore} from './storage.js';
 import {notice, ask, openHelp} from './dialogs.js';
 'use strict';
 const $=s=>document.querySelector(s), esc=s=>String(s??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 $('#appVersionFooter').textContent='v'+APP_VERSION;
+initSettingsTabs();
 let records=[],current={},busy=false,service=true,reg,objectURL;
 let pageNumber=1,pageSize=50,lastPageContext='',visiblePage=[];
 try{const saved=Number(localStorage.getItem('sds-page-size'));if([25,50,100].includes(saved))pageSize=saved}catch{}
@@ -95,7 +97,9 @@ async function refreshPersistenceUI(){
 async function refreshFolderUI(){
  const state=await folderState({checkPermission:true});$('#connectFolder').textContent=state.configured?'Reconnect folder':'Connect folder';$('#connectFolder').hidden=state.configured&&state.permission==='granted';
  $('#connectFolder').disabled=!state.supported;
- for(const id of ['disconnectFolder','refreshFolder','organiseFolder','syncHint','folderStorageHelp','storageAdvanced'])$('#'+id).hidden=!state.configured;
+ for(const id of ['updateDocumentNames','cleanDuplicateCopies','checkLibraryHealth'])$('#'+id).disabled=!state.configured||state.permission!=='granted';
+ $('#maintenanceStatus').textContent=!state.configured?'These tools apply to a connected folder. Connect one in the Storage tab to use them.':state.permission!=='granted'?'Reconnect the folder in Storage before using maintenance tools.':'Download a ZIP backup, close other app windows and let cloud sync finish before maintenance.';
+ for(const id of ['disconnectFolder','refreshFolder','syncHint','folderStorageHelp'])$('#'+id).hidden=!state.configured;
  for(const id of ['browserStorageHelp','browserProtection'])$('#'+id).hidden=state.configured;
  $('#storageMode').textContent=state.configured?`📁 Saved in folder: ${state.name}`:'Saved in this browser';
  $('#storageMode').title=state.configured?`Selected folder: ${state.name} / SDS-Desk. The browser does not expose the full device path.`:'Records and PDFs are stored in this browser profile on this device.';
@@ -105,8 +109,8 @@ async function refreshFolderUI(){
  $('#folderCheckStatus').hidden=!state.configured;$('#folderCheckStatus').textContent=lastFolderCheck;
  if(!state.configured)await refreshPersistenceUI();
 }
-async function openStorageSettings(showGuide=false){updateNotifications();if(!$('#settings').open)$('#settings').showModal();await refreshFolderUI();if(showGuide){$('#storageChoiceGuide').open=true;$('#storageChoiceGuide').scrollIntoView({block:'nearest'});$('#storageChoiceGuide summary').focus({preventScroll:true})}}
-$('#settingsOpen').onclick=()=>openStorageSettings();$('#storageChoiceHelp').onclick=()=>openStorageSettings(true);$('#settingsClose').onclick=$('#settingsDone').onclick=()=>$('#settings').close();
+async function openStorageSettings(showGuide=false){showSettingsTab('storage');updateNotifications();if(!$('#settings').open)$('#settings').showModal();await refreshFolderUI();if(showGuide){$('#storageChoiceGuide').open=true;$('#storageChoiceGuide').scrollIntoView({block:'nearest'});$('#storageChoiceGuide summary').focus({preventScroll:true})}}
+$('#settingsOpen').onclick=()=>openStorageSettings();$('#storageChoiceHelp').onclick=()=>openStorageSettings(true);$('#settingsClose').onclick=$('#settingsDone').onclick=()=>$('#settings').close();$('#settingsHelp').onclick=()=>{const name=$('#settingsTabs [aria-selected="true"]').dataset.settingsTab;$('#settings').close();openHelp(name==='notifications'?'offline':'folders')};
 function backupStatus(){const saved=localStorage.getItem('sds-last-backup');$('#lastBackup').textContent=saved?'Last backup downloaded: '+new Date(saved).toLocaleString():'No backup downloaded yet'}backupStatus();
 
 $('#connectFolder').onclick=async()=>{
@@ -123,7 +127,6 @@ $('#disconnectFolder').onclick=async()=>{
  if(busy)return;busy=true;
  try{await disconnectFolder();lastFolderCheck='';await load()}catch(e){notice(e.message)}finally{busy=false}
 };
-$('#organiseFolder').onclick=async()=>{if(busy||$('#editor').open)return notice('Save and close the open record first.');const b=$('#organiseFolder');busy=true;b.disabled=true;b.textContent='Organising…';try{const count=await organiseExistingPDFs();await load();notice(`${count} record version(s) organised into readable document folders. PDF links remain attached to their records.`)}catch(e){notice('Organising stopped: '+e.message+' Previously completed files remain available.')}finally{busy=false;b.disabled=false;b.textContent='Organise existing PDFs'}};
 $('#refreshFolder').onclick=async()=>{
  if(busy||$('#editor').open)return notice('Finish the current operation and close the editor before checking the folder.');
  const button=$('#refreshFolder');busy=true;button.disabled=true;button.textContent='Checking…';$('#folderCheckStatus').textContent='Reading changes from the folder…';
@@ -147,7 +150,7 @@ $('#helpIcon').onclick=()=>openHelp();
 function alerts(){if(!('Notification'in window)||Notification.permission!=='granted')return;const items=records.filter(r=>!r.deletedAt&&['due','overdue'].includes(state(r).kind));const key= new Date().toDateString()+items.map(r=>r.id+state(r).kind).join();if(items.length&&localStorage.getItem('alert-key')!==key){const options={body:`${items.length} SDS record(s) need attention. Open the library to review them.`,tag:'sds-due'};if(reg)reg.showNotification('SDS review reminder',options).catch(()=>{});else try{new Notification('SDS review reminder',options)}catch{}localStorage.setItem('alert-key',key)}}
 $('#notify').onclick=async()=>{if(!('Notification'in window))return;try{if(Notification.permission==='denied'){updateNotifications();return}await Notification.requestPermission();updateNotifications();alerts()}catch(e){$('#notificationPermission').textContent='Notifications could not be enabled. '+e.message}};
 const notificationsDialog=document.createElement('dialog');notificationsDialog.id='notificationsDialog';notificationsDialog.setAttribute('aria-labelledby','notificationsTitle');notificationsDialog.innerHTML='<div class="dialoghead"><h2 id="notificationsTitle">Notifications</h2><button id="notificationsClose" aria-label="Close notifications">✕</button></div><div id="notificationsList" class="settings-body"></div><div class="dialogfoot"><button id="notificationPreferences">Notification settings</button><button id="notificationsDone" class="primary">Done</button></div>';document.body.append(notificationsDialog);
-function notificationSettings(){notificationsDialog.close();updateNotifications();if(!$('#settings').open)$('#settings').showModal();$('#notificationSettings').scrollIntoView({block:'start'});($('#notify').hidden?$('#notificationSettings'):$('#notify')).focus({preventScroll:true})}
+function notificationSettings(){notificationsDialog.close();showSettingsTab('notifications');updateNotifications();if(!$('#settings').open)$('#settings').showModal();$('#notificationSettings').scrollIntoView({block:'start'});($('#notify').hidden?$('#notificationSettings'):$('#notify')).focus({preventScroll:true})}
 function updateNotifications(){const supported='Notification'in window,permission=supported?Notification.permission:'unsupported',enabled=permission==='granted';const items=records.filter(r=>!r.deletedAt&&['due','overdue'].includes(state(r).kind));$('#notificationOff').hidden=enabled;$('#notificationCount').hidden=!enabled||!items.length;$('#notificationCount').textContent=items.length>99?'99+':items.length;$('#headerNotifications').setAttribute('aria-label',enabled?`Notifications: ${items.length} SDS records need attention`:'Notifications: not enabled. Open settings');$('#headerNotifications').title=enabled?'Notifications':'Notifications not enabled · Open settings';$('#notify').hidden=!supported||enabled||permission==='denied';$('#notify').disabled=!supported||enabled||permission==='denied';$('#notificationState').textContent=enabled?'Enabled':permission==='denied'?'Blocked by browser':supported?'Not enabled':'Unavailable';$('#notify').textContent=enabled?'Notifications enabled':permission==='denied'?'Blocked in browser settings':supported?'Enable notifications':'Unavailable in this browser';$('#notificationPermission').textContent=enabled?'Desktop notifications are enabled. To turn them off, use Notifications in the browser site settings.':permission==='denied'?'Notifications are blocked. Open the site controls beside the address bar, allow Notifications in site settings, then return here.':'Notification'in window?'Desktop notifications are not enabled. Select Enable notifications and allow the browser request.':'This browser does not support desktop notifications. Review dates remain visible in the library.';if(notificationsDialog.open)renderNotifications(items)}
 let startupReminderScheduled=false,startupReminderDone=false;
 function scheduleStartupReminders(){

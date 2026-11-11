@@ -16,9 +16,9 @@ README.txt             This guide.
 
 Safe maintenance
 ----------------
-Use Settings > Advanced > Update document names to preview and apply new PDF names.
-Use Settings > Advanced > Clean duplicate copies to remove only verified pending duplicates.
-Use Settings > Advanced > Check library health to identify unreadable records or missing PDFs.
+Use Settings > Maintenance > Update document names to preview and apply new PDF names.
+Use Settings > Maintenance > Clean duplicate copies to remove only verified pending duplicates.
+Use Settings > Maintenance > Check library health to identify unreadable records or missing PDFs.
 Do not manually rename or delete documents, record versions, PDF indexes or pending files.
 Historical PDFs and records in Trash are retained. Duplicate cleanup does not remove them.
 

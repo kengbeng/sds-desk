@@ -18,7 +18,7 @@ export async function connectFolder(reconnect=false){
 export async function disconnectFolder(){await setting(null,true);folder=null;configured=false;loaded=true}
 async function dirs(){const root=await requireFolder();const app=await root.getDirectoryHandle('SDS-Desk',{create:true});const system=await app.getDirectoryHandle('_system',{create:true});return {app,documents:await app.getDirectoryHandle('documents',{create:true}),pending:await system.getDirectoryHandle('pending-pdfs',{create:true}),maps:await system.getDirectoryHandle('pdf-index',{create:true}),records:await app.getDirectoryHandle('records',{create:true})}}
 async function writeNew(dir,name,blob){const handle=await dir.getFileHandle(name,{create:true}),w=await handle.createWritable();try{await w.write(blob);await w.close()}catch(e){try{await w.abort()}catch{}throw e}}
-async function ensureLibraryGuide(app){try{await app.getFileHandle('README.txt')}catch(error){if(error.name!=='NotFoundError')throw error;await writeNew(app,'README.txt',LIBRARY_README)}}
+async function ensureLibraryGuide(app){try{const handle=await app.getFileHandle('README.txt'),file=await handle.getFile();if(file.size<100000){const text=await file.text();if(text===LIBRARY_README.replaceAll('Settings > Maintenance','Settings > Advanced'))await writeNew(app,'README.txt',LIBRARY_README)}}catch(error){if(error.name!=='NotFoundError')throw error;await writeNew(app,'README.txt',LIBRARY_README)}}
 export async function finishFolderBatch(){if(!(await folderState()).configured)return true;return rebuildFolderIndex()}
 const documentLock=task=>navigator.locks?navigator.locks.request('sds-desk-document-maintenance',task):task();
 const pdfDigest=async blob=>Array.from(new Uint8Array(await crypto.subtle.digest('SHA-256',await blob.arrayBuffer())),v=>v.toString(16).padStart(2,'0')).join('')+'.pdf';
@@ -35,7 +35,7 @@ async function readRevision(handle,id){
  if(!Array.isArray(event.parents)||event.parents.some(name=>!revisionName.test(name)))throw Error('Invalid record-history references.');
  return event;
 }
-function recordWarning(id,name,error){return `Record version skipped: records/${id}/${name} — ${error.message||'File could not be read.'} Open Settings → Advanced → Library health.`}
+function recordWarning(id,name,error){return `Record version skipped: records/${id}/${name} — ${error.message||'File could not be read.'} Open Settings → Maintenance → Library health.`}
 async function readRecord(parent,id,{strict=false}={}){
  const dir=await parent.getDirectoryHandle(id),events=[],failures=[];
  for await(const [name,handle]of dir.entries()){
@@ -43,7 +43,7 @@ async function readRecord(parent,id,{strict=false}={}){
   try{events.push({...await readRevision(handle,id),key:name})}
   catch(error){lastWarnings.push(recordWarning(id,name,error));failures.push(name)}
  }
- if(strict&&failures.length)throw Error(`This record has unreadable versions. Open Settings → Advanced → Library health before editing it. Affected file: records/${id}/${failures[0]}`);
+ if(strict&&failures.length)throw Error(`This record has unreadable versions. Open Settings → Maintenance → Library health before editing it. Affected file: records/${id}/${failures[0]}`);
  return selectRevisions(events);
 }
 async function writeRevision(dir,id,event){
