@@ -1,3 +1,4 @@
+import {APP_VERSION} from './version.js';
 import {folderState,folderList,folderPDF,folderPutPDF,folderSave,folderExport,folderRestore,folderBackupFiles,folderRestoreFiles,documentPath} from './folder.js';
 import {extractFields,layoutText} from './extract.js';
 import * as pdfjs from './vendor/pdf.mjs';
@@ -11,7 +12,7 @@ export async function api(path,options={}){
  const folderMode=(await folderState()).configured;
  if(folderMode&&path==='/api/records')return folderList();
  if(folderMode&&['/api/trash','/api/untrash'].includes(path))return folderSave(JSON.parse(options.body),path==='/api/trash'?'trash':'untrash');
- if(path==='/api/records')return {records:(await all('records')).sort((a,b)=>b.updated.localeCompare(a.updated)),storage:'This browser / this device',version:'0.5.2'};
+ if(path==='/api/records')return {records:(await all('records')).sort((a,b)=>b.updated.localeCompare(a.updated)),storage:'This browser / this device',version:APP_VERSION};
  if(path==='/api/import'){
   const file=options.body, bytes=new Uint8Array(await file.arrayBuffer());
   if(new TextDecoder().decode(bytes.slice(0,5))!=='%PDF-')throw Error('Select a valid PDF.');

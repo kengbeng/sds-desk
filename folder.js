@@ -59,7 +59,7 @@ export async function rebuildFolderIndex(){
  try{
   const listing=await folderList(),index={format:'sds-desk-index-v1',note:'Derived summary only. The records directory is authoritative; refresh in SDS Desk after synchronisation.',records:await Promise.all(listing.records.map(async r=>{const out={};for(const k of ['id','name','supplier','code','concentration','cas','lab','revision','review','expiry','file','updated','deletedAt'])if(r[k]!==undefined)out[k]=r[k];out.pdf=await pdfRelativePath(r.file);out.recordDirectory='records/'+r.id;out.conflictingEdits=!!r._conflict;return out})).then(rows=>rows.sort((a,b)=>a.id.localeCompare(b.id)))};
   const app=await(await requireFolder()).getDirectoryHandle('SDS-Desk'),text=JSON.stringify(index,null,2);let previous='';try{previous=await(await(await app.getFileHandle('index.json')).getFile()).text()}catch(e){if(e.name!=='NotFoundError')throw e}if(previous!==text)await writeNew(app,'index.json',text);indexWarning='';return true;
- }catch{indexWarning='Records are preserved, but the shared summary index could not be refreshed. Check folder permissions and Refresh folder.';return false}
+ }catch{indexWarning='Records are preserved, but the shared summary index could not be refreshed. Check folder permissions and select Check for updates.';return false}
 }
 
 // Snapshot every file, including superseded revisions and pending uploads.
