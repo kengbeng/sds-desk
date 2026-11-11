@@ -27,19 +27,47 @@ export function initBulk({getRecords,getVisible,load,isBusy,setBusy,getImportLoc
  $('#bulkEdit').onclick=()=>{if(isBusy())return;targets=chosen();if(!targets.length)return;if(targets.some(r=>r._conflict))return notice('Resolve conflicting edits individually before bulk editing these records.');$('#bulkForm').reset();dialog.querySelectorAll('[name]').forEach(i=>i.disabled=true);$('#bulkError').textContent='';$('#bulkTarget').textContent=`Changes apply to ${targets.length} selected records.`;dialog.showModal()};
  $('#bulkClose').onclick=$('#bulkCancel').onclick=()=>dialog.close();dialog.onchange=e=>{if(e.target.dataset.field)$('#bulkForm').elements[e.target.dataset.field].disabled=!e.target.checked};
  $('#bulkForm').onsubmit=async e=>{e.preventDefault();if(isBusy())return;const patch=Object.fromEntries(new FormData(e.target));if(!Object.keys(patch).length){$('#bulkError').textContent='Select at least one field to change.';return}if(!await ask(`Apply these ${Object.keys(patch).length} field changes to ${targets.length} records? Existing values in these fields will be replaced.`))return;dialog.close();await run(targets,r=>api('/api/save',{method:'POST',body:JSON.stringify({...r,...patch})}))};
- importer.onclick=()=>{if(!isBusy())picker.click()};
- picker.onchange=async()=>{
-  if(isBusy())return;const files=[...picker.files];picker.value='';if(!files.length)return;
-  if(!await ask(`Import ${files.length} PDFs as separate records? Extracted details are drafts and must be verified against each PDF. Duplicate PDFs already in this library will be skipped.`))return;
-  setBusy(true);importer.disabled=true;const known=new Set(getRecords().map(r=>r.file));let added=0,skipped=0;const errors=[];
+ const importDialog=document.createElement('dialog');importDialog.id='bulkImportDialog';importDialog.setAttribute('aria-labelledby','bulkImportTitle');
+ importDialog.innerHTML='<div class="dialoghead"><h2 id="bulkImportTitle">Bulk import</h2><button id="bulkImportClose" aria-label="Close bulk import">✕</button></div><div class="settings-body"><div id="bulkDropzone" class="bulk-dropzone" tabindex="0" role="group" aria-label="Drop multiple SDS PDF files here"><strong>Drag and drop PDFs here</strong><span>Import one or more files. Each PDF must be 30 MB or less.</span><button type="button" id="bulkChooseFiles">Choose PDFs</button><small>Select multiple files in the file picker.</small></div><p>Creates a separate record for each PDF. PDFs already in this library are skipped, including records in Trash. Check extracted details against each original document after importing.</p><div id="bulkFileList" class="bulk-file-list" aria-label="Selected files"></div><p id="bulkImportStatus" role="status" aria-live="polite">No files selected.</p></div><div class="dialogfoot"><button id="bulkImportCancel">Cancel</button><button id="bulkImportStart" class="primary" disabled>Import PDFs</button></div>';
+ document.body.append(importDialog);let pendingFiles=[],importing=false;
+ const zone=$('#bulkDropzone'),status=$('#bulkImportStatus'),startButton=$('#bulkImportStart');
+ const setStatus=message=>status.textContent=message;
+ function selectFiles(files){
+  if(importing||isBusy())return;
+  pendingFiles=[...files];$('#bulkFileList').replaceChildren();
+  for(const file of pendingFiles){const line=document.createElement('div');line.className='bulk-file';line.textContent=file.name;$('#bulkFileList').append(line)}
+  const invalid=pendingFiles.filter(f=>(! /\.pdf$/i.test(f.name)&&f.type!=='application/pdf')||f.size>30*1024*1024);
+  setStatus(pendingFiles.length?`${pendingFiles.length} file(s) selected.`+(invalid.length?` ${invalid.length} file(s) cannot be imported. Select PDFs of 30 MB or less.`:''):'No files selected.');
+  startButton.disabled=!pendingFiles.length||!!invalid.length;startButton.textContent=pendingFiles.length?`Import ${pendingFiles.length} PDF${pendingFiles.length===1?'':'s'}`:'Import PDFs';
+ }
+ importer.onclick=()=>{if(isBusy())return;selectFiles([]);$('#bulkImportCancel').textContent='Cancel';importDialog.showModal()};
+ $('#bulkChooseFiles').onclick=()=>{if(!importing&&!isBusy())picker.click()};
+ picker.onchange=()=>{selectFiles(picker.files);picker.value=''};
+ function closeImport(){if(!importing)importDialog.close()}
+ $('#bulkImportClose').onclick=$('#bulkImportCancel').onclick=closeImport;
+ importDialog.addEventListener('cancel',event=>{if(importing)event.preventDefault()});
+ let dragDepth=0;
+ for(const type of ['dragenter','dragover','dragleave','drop'])zone.addEventListener(type,event=>{
+  event.preventDefault();event.stopPropagation();if(importing||isBusy())return;
+  if(type==='dragenter'){dragDepth++;zone.classList.add('dragover')}
+  if(type==='dragover')event.dataTransfer.dropEffect='copy';
+  if(type==='dragleave'&&--dragDepth<=0)zone.classList.remove('dragover');
+  if(type==='drop'){dragDepth=0;zone.classList.remove('dragover');selectFiles(event.dataTransfer.files)}
+ });
+ zone.addEventListener('keydown',event=>{if(event.target===zone&&['Enter',' '].includes(event.key)){event.preventDefault();$('#bulkChooseFiles').click()}});
+ startButton.onclick=async()=>{
+  if(importing||isBusy()||!pendingFiles.length||startButton.disabled)return;
+  const files=[...pendingFiles];importing=true;setBusy(true);importer.disabled=true;startButton.disabled=true;$('#bulkChooseFiles').disabled=true;$('#bulkImportClose').disabled=true;$('#bulkImportCancel').disabled=true;zone.setAttribute('aria-busy','true');
+  const known=new Set(getRecords().map(r=>r.file));let added=0,skipped=0;const errors=[];
   try{for(const [i,file]of files.entries()){
-   importer.textContent=`Importing ${i+1} / ${files.length}…`;
+   importer.textContent=`Importing ${i+1} / ${files.length}…`;setStatus(`Importing ${i+1} of ${files.length}: ${file.name}`);
    try{if(!/\.pdf$/i.test(file.name)&&file.type!=='application/pdf')throw Error('Please choose a PDF.');if(file.size>30*1024*1024)throw Error('PDF exceeds 30 MB.');
     const d=await api('/api/import',{method:'POST',body:file});if(known.has(d.file)){skipped++;continue}
     await api('/api/save',{method:'POST',body:JSON.stringify({...d.fields,name:d.fields.name?.trim()||file.name.replace(/\.pdf$/i,''),file:d.file,lab:getImportLocation(),notes:'Bulk import: verify extracted details against the original PDF.'+(d.warnings.length?'\n'+d.warnings.join('\n'):'' )})});known.add(d.file);added++;
    }catch(e){errors.push(`${file.name}: ${e.message}`)}
-  }await load()}finally{setBusy(false);importer.disabled=false;importer.textContent='Bulk import';update()}
-  await notice(`Imported ${added}; skipped ${skipped} duplicate(s); failed ${errors.length}. Review each imported record before relying on its details.`+(errors.length?'\n'+errors.join('\n'):''));
+  }await load();setStatus(`Imported ${added}; skipped ${skipped} duplicate(s); failed ${errors.length}. Review each imported record against its PDF.`+(errors.length?'\n'+errors.join('\n'):''));
+  }catch(e){setStatus(`Import stopped: ${e.message}. ${added} record(s) were saved. Check the library before retrying.`)}
+  finally{importing=false;pendingFiles=[];setBusy(false);importer.disabled=false;importer.textContent='Bulk import';startButton.textContent='Import PDFs';startButton.disabled=true;$('#bulkChooseFiles').disabled=false;$('#bulkImportClose').disabled=false;$('#bulkImportCancel').disabled=false;$('#bulkImportCancel').textContent='Done';zone.setAttribute('aria-busy','false');update()}
  };
  return {update};
 }
