@@ -6,7 +6,7 @@ export function initBulk({getRecords,getVisible,load,isBusy,setBusy,getImportLoc
  toolbar.innerHTML='<strong id="selectionCount" aria-live="polite"></strong><button id="bulkEdit">Edit selected</button><button id="bulkTrash" class="danger">Move to Trash</button><button id="bulkRestore">Restore selected</button><button id="clearSelection">Clear selection</button>';
  $('.tablewrap').before(toolbar);
  const heading=document.querySelector('thead th');heading.insertAdjacentHTML('afterbegin','<input id="selectAll" type="checkbox" aria-label="Select all visible records"> ');
- const importer=document.createElement('button');importer.textContent='Import PDFs';$('#add').before(importer);
+ const importer=document.createElement('button');importer.textContent='Bulk import';$('#add').before(importer);
  const picker=document.createElement('input');picker.type='file';picker.accept='.pdf,application/pdf';picker.multiple=true;picker.hidden=true;document.body.append(picker);
  const dialog=document.createElement('dialog');dialog.className='bulk-dialog';dialog.setAttribute('aria-labelledby','bulkTitle');
  const fields=[['supplier','Supplier / manufacturer','text'],['lab','Location','text'],['review','Review due date','date'],['expiry','Explicit expiry date','date'],['notes','Notes','text']];
@@ -38,7 +38,7 @@ export function initBulk({getRecords,getVisible,load,isBusy,setBusy,getImportLoc
     const d=await api('/api/import',{method:'POST',body:file});if(known.has(d.file)){skipped++;continue}
     await api('/api/save',{method:'POST',body:JSON.stringify({...d.fields,name:d.fields.name?.trim()||file.name.replace(/\.pdf$/i,''),file:d.file,lab:getImportLocation(),notes:'Bulk import: verify extracted details against the original PDF.'+(d.warnings.length?'\n'+d.warnings.join('\n'):'' )})});known.add(d.file);added++;
    }catch(e){errors.push(`${file.name}: ${e.message}`)}
-  }await load()}finally{setBusy(false);importer.disabled=false;importer.textContent='Import PDFs';update()}
+  }await load()}finally{setBusy(false);importer.disabled=false;importer.textContent='Bulk import';update()}
   await notice(`Imported ${added}; skipped ${skipped} duplicate(s); failed ${errors.length}. Review each imported record before relying on its details.`+(errors.length?'\n'+errors.join('\n'):''));
  };
  return {update};

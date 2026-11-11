@@ -2,6 +2,7 @@
   "id": "./",
   "name": "SDS Desk",
   "short_name": "SDS Desk",
+  "description": "Safety Data Sheet Manager",
   "start_url": "./",
   "scope": "./",
   "display": "standalone",
