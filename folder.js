@@ -18,8 +18,92 @@ export async function disconnectFolder(){await setting(null,true);folder=null;co
 async function dirs(){const root=await requireFolder();const app=await root.getDirectoryHandle('SDS-Desk',{create:true});const system=await app.getDirectoryHandle('_system',{create:true});return {app,documents:await app.getDirectoryHandle('documents',{create:true}),pending:await system.getDirectoryHandle('pending-pdfs',{create:true}),maps:await system.getDirectoryHandle('pdf-index',{create:true}),records:await app.getDirectoryHandle('records',{create:true})}}
 async function writeNew(dir,name,blob){const handle=await dir.getFileHandle(name,{create:true}),w=await handle.createWritable();try{await w.write(blob);await w.close()}catch(e){try{await w.abort()}catch{}throw e}}
 export function selectRevisions(events){const parents=new Set(events.flatMap(e=>e.parents||[])),tips=events.filter(e=>!parents.has(e.key)).sort((a,b)=>b.record.updated.localeCompare(a.record.updated)||b.key.localeCompare(a.key));if(!tips.length)return null;return {...tips[0].record,_heads:tips.map(e=>e.key).sort(),_conflict:tips.length>1,_variants:tips.map(e=>({key:e.key,record:e.record}))}}
-function validateRecord(r,id){if(!r||r.id!==id||!uuid.test(r.id)||typeof r.name!=='string'||!pdfname.test(r.file)||typeof r.updated!=='string')throw Error('Invalid record revision');return r}
-async function readRecord(parent,id){const dir=await parent.getDirectoryHandle(id),events=[];for await(const [name,h]of dir.entries()){if(h.kind!=='file'||!/^v-[a-f0-9-]{36}\.json$/i.test(name))continue;try{const file=await h.getFile();if(file.size>2000000)throw Error('Oversized record');const e=JSON.parse(await file.text());validateRecord(e.record,id);if(!Array.isArray(e.parents)||e.parents.some(v=>!/^v-[a-f0-9-]{36}\.json$/i.test(v)))throw Error('Invalid parents');events.push({...e,key:name})}catch{lastWarnings.push('An unreadable record version was skipped. Wait for sync to finish and refresh.')}}return selectRevisions(events)}
+function validateRecord(r,id){if(!r||r.id!==id||!uuid.test(r.id)||typeof r.name!=='string'||!pdfname.test(r.file)||typeof r.updated!=='string')throw Error('Invalid record revision');if(r.history!=null&&(!Array.isArray(r.history)||r.history.some(h=>!h||!pdfname.test(h.file))))throw Error('Invalid PDF history.');return r}
+const revisionName=/^v-[a-f0-9-]{36}\.json$/i;
+async function readRevision(handle,id){
+ const file=await handle.getFile();
+ if(!file.size)throw Object.assign(Error('Empty record file (0 bytes).'),{kind:'empty-record',size:0,lastModified:file.lastModified});
+ if(file.size>2000000)throw Error('Record exceeds the 2 MB limit.');
+ let event;try{event=JSON.parse(await file.text())}catch{throw Error('Record file is not valid JSON.')}
+ validateRecord(event?.record,id);
+ if(!Array.isArray(event.parents)||event.parents.some(name=>!revisionName.test(name)))throw Error('Invalid record-history references.');
+ return event;
+}
+function recordWarning(id,name,error){return `Record version skipped: records/${id}/${name} — ${error.message||'File could not be read.'} Open Settings → Advanced → Library health.`}
+async function readRecord(parent,id,{strict=false}={}){
+ const dir=await parent.getDirectoryHandle(id),events=[],failures=[];
+ for await(const [name,handle]of dir.entries()){
+  if(handle.kind!=='file'||!revisionName.test(name))continue;
+  try{events.push({...await readRevision(handle,id),key:name})}
+  catch(error){lastWarnings.push(recordWarning(id,name,error));failures.push(name)}
+ }
+ if(strict&&failures.length)throw Error(`This record has unreadable versions. Open Settings → Advanced → Library health before editing it. Affected file: records/${id}/${failures[0]}`);
+ return selectRevisions(events);
+}
+async function writeRevision(dir,id,event){
+ validateRecord(event.record,id);const name='v-'+crypto.randomUUID()+'.json',text=JSON.stringify(event,null,2);
+ if(new Blob([text]).size>2000000)throw Error('Record exceeds the 2 MB limit. Shorten its notes before saving.');
+ try{
+  await writeNew(dir,name,text);
+  const handle=await dir.getFileHandle(name),stored=await handle.getFile();
+  if(await stored.text()!==text)throw Error('The record could not be verified after saving.');
+  await readRevision(handle,id);
+ }catch(error){
+  // A failed write can leave the newly created handle empty. Only remove this
+  // unique new revision when it is still empty; retain any non-empty evidence.
+  try{const file=await(await dir.getFileHandle(name)).getFile();if(file.size===0)await dir.removeEntry(name)}catch{}
+  throw Error(`Record save failed: ${error.message}. Check folder access and available disk space. The PDF may already be saved; review Library health before retrying.`);
+ }
+ return name;
+}
+export async function checkLibraryHealth(){
+ const {records}=await dirs(),issues=[],selected=[],pdfs=new Map();let versions=0;
+ for await(const [id,dir]of records.entries()){
+  if(dir.kind!=='directory'||!uuid.test(id))continue;
+  const events=[],localIssues=[];
+  try{
+   for await(const [name,handle]of dir.entries()){
+    if(handle.kind!=='file'||!revisionName.test(name))continue;
+    try{events.push({...await readRevision(handle,id),key:name});versions++}
+    catch(error){localIssues.push({kind:error.kind||'unreadable-record',path:`records/${id}/${name}`,recordId:id,reason:error.message,size:error.size,lastModified:error.lastModified})}
+   }
+  }catch(error){localIssues.push({kind:'unreadable-folder',path:`records/${id}`,recordId:id,reason:error.message})}
+  const record=selectRevisions(events),name=record?.name||'No readable record';if(record)selected.push(record);
+  const keys=new Set(events.map(event=>event.key));
+  for(const event of events){
+   for(const parent of event.parents)if(!keys.has(parent)&&!localIssues.some(issue=>issue.path.endsWith('/'+parent)))localIssues.push({kind:'missing-version',path:`records/${id}/${parent}`,recordId:id,reason:'A referenced history version is missing.'});
+   for(const key of [event.record.file,...(event.record.history||[]).map(h=>h.file)])if(!pdfs.has(key))pdfs.set(key,name);
+  }
+  for(const issue of localIssues)issues.push({...issue,recordName:name});
+ }
+ for(const [key,name]of pdfs){
+  try{const file=await folderPDF(key);if(!file.size||new TextDecoder().decode(await file.slice(0,5).arrayBuffer())!=='%PDF-')throw Error('The linked file is empty or is not a PDF.')}
+  catch(error){issues.push({kind:'unreadable-pdf',path:`PDF key: ${key}`,recordName:name,reason:error.message})}
+ }
+ return {checkedAt:new Date().toISOString(),records:selected.length,versions,pdfs:pdfs.size,issues};
+}
+export async function repairEmptyRecordFiles(report){
+ const {app,records}=await dirs(),batch=crypto.randomUUID(),result={moved:[],skipped:[]};let recovery;
+ for(const issue of report.issues||[]){
+  if(issue.kind!=='empty-record')continue;
+  const parts=issue.path.split('/');
+  if(parts.length!==3||parts[0]!=='records'||!uuid.test(parts[1])||!revisionName.test(parts[2]))throw Error('Invalid recovery path.');
+  const [,id,name]=parts;
+  try{
+   const dir=await records.getDirectoryHandle(id),handle=await dir.getFileHandle(name),file=await handle.getFile();
+   if(file.size!==0||file.lastModified!==issue.lastModified){result.skipped.push(issue.path+' changed after the check. Run Library health again.');continue}
+   if(!recovery){const system=await app.getDirectoryHandle('_system',{create:true});const root=await system.getDirectoryHandle('recovery',{create:true});recovery=await root.getDirectoryHandle(batch,{create:true})}
+   const recordCopies=await recovery.getDirectoryHandle(id,{create:true});
+   await writeNew(recordCopies,name,file);
+   const copy=await(await recordCopies.getFileHandle(name)).getFile();if(copy.size!==0)throw Error('Recovery copy could not be verified.');
+   await writeNew(recordCopies,name+'.recovery.json',JSON.stringify({format:'sds-recovery-v1',originalPath:issue.path,reason:issue.reason,created:new Date().toISOString()},null,2));
+   const current=await handle.getFile();if(current.size!==0||current.lastModified!==file.lastModified){result.skipped.push(issue.path+' changed during recovery and was left in place.');continue}
+   await dir.removeEntry(name);result.moved.push(issue.path);
+  }catch(error){result.skipped.push(issue.path+': '+error.message)}
+ }
+ result.recoveryPath=recovery?`_system/recovery/${batch}`:null;
+ result.indexRebuilt=await rebuildFolderIndex();return result;
+}
 export async function folderList(){const {records}=await dirs();lastWarnings=[];const rows=[];for await(const [id,h]of records.entries()){if(h.kind==='directory'&&uuid.test(id)){const row=await readRecord(records,id);if(row)rows.push(row)}}if(indexWarning)lastWarnings.push(indexWarning);return {records:rows.sort((a,b)=>b.updated.localeCompare(a.updated)),storage:`Connected folder: ${folder.name} / SDS-Desk · Cloud sync handled by your desktop sync app`,warnings:[...new Set(lastWarnings)]}}
 export function safePart(value,fallback='Unknown',limit=54){let out=String(value||'').normalize('NFKC').replace(/[<>:"/\\|?*\x00-\x1f]/g,'-').replace(/\s+/g,'-').replace(/-+/g,'-').replace(/^[. -]+|[. -]+$/g,'').slice(0,limit).replace(/[. -]+$/g,'');if(!out)out=fallback;if(/^(CON|PRN|AUX|NUL|COM[0-9]|LPT[0-9])(?:\.|$)/i.test(out))out='_'+out;return out}
 export function documentPath(record,key=record.file){const product=safePart(record.name,'Unnamed-product',32),supplier=safePart(record.supplier,'Unknown-supplier',22),cas=(record.cas||'').match(/\b\d{2,7}-\d{2}-\d\b/)?.[0];const date=/^\d{4}-\d{2}-\d{2}$/.test(record.revision||'')?record.revision:'Undated';return ['documents',product+(cas?'__CAS-'+cas:''),`${product}__${supplier}__SDS-${date}__${key.slice(0,12)}.pdf`]}
@@ -41,7 +125,7 @@ export async function organisePDF(record,key=record.file){
 export async function organiseExistingPDFs(){const list=await folderList();let count=0;for(const row of list.records){for(const v of row._variants||[{record:row}]){const r=v.record;await organisePDF(r);count++;for(const h of r.history||[])await organisePDF({...r,revision:h.revision||''},h.file)}}await rebuildFolderIndex();return count}
 export async function folderSave(input,action='save'){
  const {records}=await dirs(),id=input.id||crypto.randomUUID();if(!uuid.test(id))throw Error('Invalid record ID');let old;
- try{old=await readRecord(records,id)}catch(e){if(e.name!=='NotFoundError')throw e}
+ try{old=await readRecord(records,id,{strict:true})}catch(e){if(e.name!=='NotFoundError')throw e}
  if(old&&JSON.stringify(input._heads||[])!==JSON.stringify(old._heads))throw Error('This record has changed in the folder. Reopen it to review the newest version.');
  if(old?._conflict&&!input._resolveConflict)throw Error('Conflicting edits exist. Open the record, compare versions, and explicitly confirm resolution.');
  let record;
@@ -50,10 +134,10 @@ export async function folderSave(input,action='save'){
  if(old?._conflict&&action==='save'){const seen=new Set([record.file,...(record.history||[]).map(h=>h.file)]);for(const variant of old._variants){const v=variant.record;if(!seen.has(v.file)){record.history=[...(record.history||[]),{file:v.file,revision:v.revision||'',replaced:new Date().toISOString()}];seen.add(v.file)}}}
  record.updated=new Date().toISOString();for(const key of ['_heads','_conflict','_variants','_resolveConflict','_pdfPath'])delete record[key];
  if(!record.name?.trim())throw Error('Product name is required');await organisePDF(record);
- const event={format:'sds-record-v1',parents:old?._heads||[],record};const dir=await records.getDirectoryHandle(id,{create:true});await writeNew(dir,'v-'+crypto.randomUUID()+'.json',JSON.stringify(event,null,2));await rebuildFolderIndex();return record;
+ const event={format:'sds-record-v1',parents:old?._heads||[],record};const dir=await records.getDirectoryHandle(id,{create:true});await writeRevision(dir,id,event);await rebuildFolderIndex();return record;
 }
 export async function folderExport(){const {records}=await folderList(),keys=new Set();for(const r of records){for(const v of r._variants||[{record:r}]){keys.add(v.record.file);for(const h of v.record.history||[])keys.add(h.file)}}const files=[],names=[];for(const key of keys){files.push(await folderPDF(key));names.push(key)}return {records,files,keys:names}}
-export async function folderRestore(rows,pdfs){for(const [key,blob]of pdfs)await folderPutPDF(key,blob);const existing=new Set((await folderList()).records.map(r=>r.id));for(const row of rows)if(!existing.has(row.id)){const variants=row._variants?.length?row._variants.map(v=>v.record):[row];for(const record of variants){const {records}=await dirs(),dir=await records.getDirectoryHandle(row.id,{create:true});const clean={...record};for(const k of ['_heads','_conflict','_variants','_pdfPath'])delete clean[k];await organisePDF(clean);for(const h of clean.history||[])await organisePDF({...clean,revision:h.revision||''},h.file);await writeNew(dir,'v-'+crypto.randomUUID()+'.json',JSON.stringify({format:'sds-record-v1',parents:[],record:clean}))}}await rebuildFolderIndex()}
+export async function folderRestore(rows,pdfs){for(const [key,blob]of pdfs)await folderPutPDF(key,blob);const existing=new Set((await folderList()).records.map(r=>r.id));for(const row of rows)if(!existing.has(row.id)){const variants=row._variants?.length?row._variants.map(v=>v.record):[row];for(const record of variants){const {records}=await dirs(),dir=await records.getDirectoryHandle(row.id,{create:true});const clean={...record};for(const k of ['_heads','_conflict','_variants','_pdfPath'])delete clean[k];await organisePDF(clean);for(const h of clean.history||[])await organisePDF({...clean,revision:h.revision||''},h.file);await writeRevision(dir,row.id,{format:'sds-record-v1',parents:[],record:clean})}}await rebuildFolderIndex()}
 
 export async function rebuildFolderIndex(){
  try{

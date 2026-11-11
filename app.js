@@ -1,3 +1,4 @@
+import {initLibraryHealth} from './library-health.js';
 import {initExcel} from './excel.js';
 import {APP_VERSION} from './version.js';
 import {initInstall} from './install.js';
@@ -112,7 +113,7 @@ $('#organiseFolder').onclick=async()=>{if(busy||$('#editor').open)return notice(
 $('#refreshFolder').onclick=async()=>{
  if(busy||$('#editor').open)return notice('Finish the current operation and close the editor before checking the folder.');
  const button=$('#refreshFolder');busy=true;button.disabled=true;button.textContent='Checking…';$('#folderCheckStatus').textContent='Reading changes from the folder…';
- try{const rebuilt=await rebuildFolderIndex();await load();if(!rebuilt)throw Error('The folder summary could not be refreshed. Check folder permissions in Manage storage.');if(!service)throw Error('Folder could not be read. Reconnect it in Manage storage.');lastFolderCheck='Folder checked at '+new Date().toLocaleTimeString(undefined,{hour:'2-digit',minute:'2-digit'});$('#folderCheckStatus').textContent=lastFolderCheck}
+ try{const rebuilt=await rebuildFolderIndex();await load();if(!rebuilt)throw Error('The folder summary could not be refreshed. Check folder permissions in Settings.');if(!service)throw Error('Folder could not be read. Reconnect it in Settings.');lastFolderCheck='Folder checked at '+new Date().toLocaleTimeString(undefined,{hour:'2-digit',minute:'2-digit'});$('#folderCheckStatus').textContent=lastFolderCheck}
  catch(e){lastFolderCheck='Folder check failed: '+e.message;$('#folderCheckStatus').textContent=lastFolderCheck}
  finally{busy=false;button.disabled=false;button.textContent='Check for updates'}
 };
@@ -138,6 +139,7 @@ function renderNotifications(items=records.filter(r=>!r.deletedAt&&['due','overd
 $('#headerNotifications').onclick=()=>{if(!('Notification'in window)||Notification.permission!=='granted'){notificationSettings();return}renderNotifications();notificationsDialog.showModal()};$('#notificationsClose').onclick=$('#notificationsDone').onclick=()=>notificationsDialog.close();$('#notificationPreferences').onclick=notificationSettings;$('#notificationsList').onclick=e=>{const b=e.target.closest('[data-record]');if(b){notificationsDialog.close();openEditor(records.find(r=>r.id===b.dataset.record))}};
 window.addEventListener('focus',()=>updateNotifications());navigator.permissions?.query({name:'notifications'}).then(p=>p.onchange=()=>updateNotifications()).catch(()=>{});
 
+initLibraryHealth({isBusy:()=>busy,setBusy:value=>{busy=value},load});
 initExcel({getCurrent:()=>sortRecords(filteredRecords(),sortPreference.key,sortPreference.direction),getAll:()=>sortRecords(records.filter(r=>!r.deletedAt),sortPreference.key,sortPreference.direction),status:r=>state(r).label,isBusy:()=>busy,getContext:scope=>[scope==='all'?'All active records':$('#filter').selectedOptions[0].textContent,scope!=='all'&&$('#search').value?'Search: '+$('#search').value:'','Sorted by '+sortOptions[sortPreference.key].label+' · '+sortDirectionLabel(sortPreference.key,sortPreference.direction)].filter(Boolean).join(' · ')});
 initInstall({isUnsafe:()=>busy||!!document.querySelector('dialog[open]:not(#installedStatus)'),setRegistration:value=>{reg=value}});
 const bulk=initBulk({getRecords:()=>records,getVisible:filteredRecords,load,isBusy:()=>busy,setBusy:value=>{busy=value},getImportLocation:()=>locationPrefs.value});
