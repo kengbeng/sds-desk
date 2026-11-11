@@ -1,3 +1,4 @@
+import {LIBRARY_README} from './folder-guide.js';
 import {APP_VERSION} from './version.js';
 import {folderState,folderList,folderPDF,folderPutPDF,folderSave,folderExport,folderRestore,folderBackupFiles,folderRestoreFiles,documentPath} from './folder.js';
 import {extractFields,layoutText} from './extract.js';
@@ -11,7 +12,7 @@ export async function pdfURL(key){const blob=(await folderState()).configured?aw
 export async function api(path,options={}){
  const folderMode=(await folderState()).configured;
  if(folderMode&&path==='/api/records')return folderList();
- if(folderMode&&['/api/trash','/api/untrash'].includes(path))return folderSave(JSON.parse(options.body),path==='/api/trash'?'trash':'untrash');
+ if(folderMode&&['/api/trash','/api/untrash'].includes(path))return folderSave(JSON.parse(options.body),path==='/api/trash'?'trash':'untrash',{deferIndex:!!options.deferFolderIndex});
  if(path==='/api/records')return {records:(await all('records')).sort((a,b)=>b.updated.localeCompare(a.updated)),storage:'This browser / this device',version:APP_VERSION};
  if(path==='/api/import'){
   const file=options.body, bytes=new Uint8Array(await file.arrayBuffer());
@@ -38,7 +39,7 @@ export async function api(path,options={}){
  if(path==='/api/save'){
   const r=JSON.parse(options.body);if(!r.name?.trim())throw Error('Product name is required.');if(!folderMode&&!await get('pdfs',r.file))throw Error('Select a PDF first.');
   for(const key of ['revision','review','expiry'])if(r[key]&&(!/^\d{4}-\d{2}-\d{2}$/.test(r[key])||isNaN(Date.parse(r[key]))))throw Error('Invalid date.');
-  if(folderMode)return folderSave(r);
+  if(folderMode)return folderSave(r,'save',{deferIndex:!!options.deferFolderIndex});
   r.id=r.id||crypto.randomUUID();let failure=null;
   await transaction(['records'],'readwrite',tx=>{const st=tx.objectStore('records'),q=st.get(r.id);q.onsuccess=()=>{const old=q.result;if(old?.deletedAt){failure='Record is in Trash. Restore it before editing.';return}if(old&&old.updated!==r.updated){failure='Record changed in another window. Reopen it before saving.';return}r.history=old?.history||[];if(old&&old.file!==r.file)r.history=[...r.history,{file:old.file,revision:old.revision,replaced:new Date().toISOString()}];r.updated=new Date().toISOString();st.put(r)}});
   if(failure)throw Error(failure);return r;
@@ -48,13 +49,14 @@ export async function api(path,options={}){
 export async function backup(){
  const folderMode=(await folderState()).configured;
  const data=folderMode?await folderExport():await transaction(['records','pdfs'],'readonly',tx=>{let records,files,keys;const a=tx.objectStore('records').getAll(),b=tx.objectStore('pdfs').getAll(),c=tx.objectStore('pdfs').getAllKeys();a.onsuccess=()=>records=a.result;b.onsuccess=()=>files=b.result;c.onsuccess=()=>keys=c.result;return()=>({records,files,keys})});
- const zip=new JSZip(),paths={};let files=folderMode?await folderBackupFiles():new Map();
+ const zip=new JSZip(),paths={},usedPaths=new Map();let files=folderMode?await folderBackupFiles():new Map();
  if(folderMode){for(const key of data.keys){const {pdfRelativePath}=await import('./folder.js');paths[key]=await pdfRelativePath(key)}}
  else{
-  for(let i=0;i<data.keys.length;i++){const key=data.keys[i],r=data.records.find(r=>r.file===key)||(data.records.find(r=>(r.history||[]).some(h=>h.file===key)));const h=r?.history?.find(h=>h.file===key);const path=r?documentPath({...r,revision:h?h.revision:r.revision},key).join('/'):'_system/pending-pdfs/'+key;paths[key]=path;files.set(path,data.files[i]);files.set('_system/pdf-index/'+key+'.json',new Blob([JSON.stringify({format:'sds-pdf-path-v1',key,path:path.split('/')})]))}
+  for(let i=0;i<data.keys.length;i++){const key=data.keys[i],r=data.records.find(r=>r.file===key)||(data.records.find(r=>(r.history||[]).some(h=>h.file===key)));const h=r?.history?.find(h=>h.file===key);let path=r?documentPath({...r,revision:h?h.revision:r.revision},key).join('/'):'_system/pending-pdfs/'+key;if(r){for(const suffix of ['',key.slice(0,12),key.slice(0,24),key.slice(0,64)]){const candidate=documentPath({...r,revision:h?h.revision:r.revision},key,suffix).join('/'),claimed=usedPaths.get(candidate.normalize('NFC').toLowerCase());if(!claimed||claimed===key){path=candidate;break}}}usedPaths.set(path.normalize('NFC').toLowerCase(),key);paths[key]=path;files.set(path,data.files[i]);files.set('_system/pdf-index/'+key+'.json',new Blob([JSON.stringify({format:'sds-pdf-path-v1',key,path:path.split('/')})]))}
   for(const r of data.records)files.set('records/'+r.id+'/v-'+crypto.randomUUID()+'.json',new Blob([JSON.stringify({format:'sds-record-v1',parents:[],record:r})]));
   files.set('index.json',new Blob([JSON.stringify({format:'sds-desk-index-v1',records:data.records.map(r=>({...r,pdf:paths[r.file]}))})]));
  }
+ if(!files.has('README.txt'))files.set('README.txt',new Blob([LIBRARY_README],{type:'text/plain'}));
  for(const [path,blob]of files)zip.file('SDS-Desk/'+path,await blob.arrayBuffer());
  zip.file('backup-manifest.json',JSON.stringify({format:'sds-desk-folder-backup',version:1,created:new Date().toISOString(),records:data.records,pdfs:paths},null,2));
  const blob=await zip.generateAsync({type:'blob',compression:'DEFLATE',compressionOptions:{level:1}});const url=URL.createObjectURL(blob),a=document.createElement('a');a.href=url;a.download='SDS-Desk-backup-'+new Date().toISOString().slice(0,10)+'.zip';a.click();setTimeout(()=>URL.revokeObjectURL(url),60000);

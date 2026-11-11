@@ -1,3 +1,4 @@
+import {finishFolderBatch} from './folder.js';
 import {suggestedReviewDate} from './dates.js';
 import {api} from './storage.js';
 import {ask,notice} from './dialogs.js';
@@ -21,21 +22,22 @@ export function initBulk({getRecords,getVisible,load,isBusy,setBusy,getImportLoc
  }
  $('#rows').addEventListener('change',e=>{if(e.target.dataset.select){e.target.checked?selected.add(e.target.dataset.select):selected.delete(e.target.dataset.select);update()}});
  $('#selectAll').onchange=e=>{selected.clear();if(e.target.checked)for(const r of getVisible())selected.add(r.id);update()};$('#clearSelection').onclick=()=>{selected.clear();update()};
- async function run(rows,operation){setBusy(true);let count=0;const errors=[];try{for(const r of rows){try{await operation(r);selected.delete(r.id);count++}catch(e){errors.push(`${r.name}: ${e.message}`)}}await load()}finally{setBusy(false);update()}await notice(`${count} of ${rows.length} records updated.`+(errors.length?'\n'+errors.join('\n'):''))}
+ async function finishBatch(){try{return await finishFolderBatch()?'':' Records were saved, but the folder summary could not be rebuilt. Use Check for updates after checking folder access.'}catch(error){return ' Records were saved, but the folder summary could not be rebuilt: '+error.message}}
+ async function run(rows,operation){setBusy(true);let count=0;const errors=[];try{for(const r of rows){try{await operation(r);selected.delete(r.id);count++}catch(e){errors.push(`${r.name}: ${e.message}`)}}const indexWarning=await finishBatch();if(indexWarning)errors.push(indexWarning);await load()}finally{setBusy(false);update()}await notice(`${count} of ${rows.length} records updated.`+(errors.length?'\n'+errors.join('\n'):''))}
  function chosen(){return getVisible().filter(r=>selected.has(r.id)).map(r=>structuredClone(r))}
- async function move(restore){if(isBusy())return;const rows=chosen();if(!rows.length||!await ask(`${restore?'Restore':'Move to Trash'} ${rows.length} selected records? PDFs and history are retained.`))return;await run(rows,r=>api(restore?'/api/untrash':'/api/trash',{method:'POST',body:JSON.stringify({id:r.id,updated:r.updated,_heads:r._heads})}))}
+ async function move(restore){if(isBusy())return;const rows=chosen();if(!rows.length||!await ask(`${restore?'Restore':'Move to Trash'} ${rows.length} selected records? PDFs and history are retained.`))return;await run(rows,r=>api(restore?'/api/untrash':'/api/trash',{method:'POST',deferFolderIndex:true,body:JSON.stringify({id:r.id,updated:r.updated,_heads:r._heads})}))}
  $('#bulkReview').onclick=async()=>{
   if(isBusy())return;
   const selectedRows=chosen(),eligible=selectedRows.filter(r=>!r.deletedAt&&!r._conflict&&!r.review&&suggestedReviewDate(r.revision));
   if(!eligible.length)return;
   if(!await ask(`Set suggested five-year review dates for ${eligible.length} of ${selectedRows.length} selected record(s), based on each SDS revision date? Existing review dates are kept. Records without a valid revision date or with conflicting edits are skipped. Check whether an earlier review is needed.`))return;
   if(isBusy())return;
-  await run(eligible,r=>api('/api/save',{method:'POST',body:JSON.stringify({...r,review:suggestedReviewDate(r.revision)})}));
+  await run(eligible,r=>api('/api/save',{method:'POST',deferFolderIndex:true,body:JSON.stringify({...r,review:suggestedReviewDate(r.revision)})}));
  };
  $('#bulkTrash').onclick=()=>move(false);$('#bulkRestore').onclick=()=>move(true);
  $('#bulkEdit').onclick=()=>{if(isBusy())return;targets=chosen();if(!targets.length)return;if(targets.some(r=>r._conflict))return notice('Resolve conflicting edits individually before bulk editing these records.');$('#bulkForm').reset();dialog.querySelectorAll('[name]').forEach(i=>i.disabled=true);$('#bulkError').textContent='';$('#bulkTarget').textContent=`Changes apply to ${targets.length} selected records.`;dialog.showModal()};
  $('#bulkClose').onclick=$('#bulkCancel').onclick=()=>dialog.close();dialog.onchange=e=>{if(e.target.dataset.field)$('#bulkForm').elements[e.target.dataset.field].disabled=!e.target.checked};
- $('#bulkForm').onsubmit=async e=>{e.preventDefault();if(isBusy())return;const patch=Object.fromEntries(new FormData(e.target));if(!Object.keys(patch).length){$('#bulkError').textContent='Select at least one field to change.';return}if(!await ask(`Apply these ${Object.keys(patch).length} field changes to ${targets.length} records? Existing values in these fields will be replaced.`))return;dialog.close();await run(targets,r=>api('/api/save',{method:'POST',body:JSON.stringify({...r,...patch})}))};
+ $('#bulkForm').onsubmit=async e=>{e.preventDefault();if(isBusy())return;const patch=Object.fromEntries(new FormData(e.target));if(!Object.keys(patch).length){$('#bulkError').textContent='Select at least one field to change.';return}if(!await ask(`Apply these ${Object.keys(patch).length} field changes to ${targets.length} records? Existing values in these fields will be replaced.`))return;dialog.close();await run(targets,r=>api('/api/save',{method:'POST',deferFolderIndex:true,body:JSON.stringify({...r,...patch})}))};
  const importDialog=document.createElement('dialog');importDialog.id='bulkImportDialog';importDialog.setAttribute('aria-labelledby','bulkImportTitle');
  importDialog.innerHTML='<div class="dialoghead"><h2 id="bulkImportTitle">Bulk import</h2><button id="bulkImportClose" aria-label="Close bulk import">✕</button></div><div class="settings-body"><div id="bulkDropzone" class="bulk-dropzone" tabindex="0" role="group" aria-label="Drop multiple SDS PDF files here"><strong>Drag and drop PDFs here</strong><span>Import one or more files. Each PDF must be 30 MB or less.</span><button type="button" id="bulkChooseFiles">Choose PDFs</button><small>Select multiple files in the file picker.</small></div><p>Creates a separate record for each PDF. PDFs already in this library are skipped, including records in Trash. Check extracted details against each original document after importing.</p><div id="bulkFileList" class="bulk-file-list" aria-label="Selected files"></div><p id="bulkImportStatus" role="status" aria-live="polite">No files selected.</p></div><div class="dialogfoot"><button id="bulkImportCancel">Cancel</button><button id="bulkImportStart" class="primary" disabled>Import PDFs</button></div>';
  document.body.append(importDialog);let pendingFiles=[],importing=false;
@@ -71,11 +73,11 @@ export function initBulk({getRecords,getVisible,load,isBusy,setBusy,getImportLoc
   try{for(const [i,file]of files.entries()){
    importer.textContent=`Importing ${i+1} / ${files.length}…`;setStatus(`Importing ${i+1} of ${files.length}: ${file.name}`);
    try{if(!/\.pdf$/i.test(file.name)&&file.type!=='application/pdf')throw Error('Please choose a PDF.');if(file.size>30*1024*1024)throw Error('PDF exceeds 30 MB.');
-    const d=await api('/api/import',{method:'POST',body:file});if(known.has(d.file)){skipped++;continue}
-    await api('/api/save',{method:'POST',body:JSON.stringify({...d.fields,review:d.fields.review||suggestedReviewDate(d.fields.revision),name:d.fields.name?.trim()||file.name.replace(/\.pdf$/i,''),file:d.file,lab:getImportLocation(),notes:'Bulk import: verify extracted details against the original PDF. Any review date suggested from the revision date is five years later; adjust where an earlier review is needed.'+(d.warnings.length?'\n'+d.warnings.join('\n'):'' )})});known.add(d.file);added++;
+    const d=await api('/api/import',{method:'POST',deferFolderIndex:true,body:file});if(known.has(d.file)){skipped++;continue}
+    await api('/api/save',{method:'POST',deferFolderIndex:true,body:JSON.stringify({...d.fields,review:d.fields.review||suggestedReviewDate(d.fields.revision),name:d.fields.name?.trim()||file.name.replace(/\.pdf$/i,''),file:d.file,lab:getImportLocation(),notes:'Bulk import: verify extracted details against the original PDF. Any review date suggested from the revision date is five years later; adjust where an earlier review is needed.'+(d.warnings.length?'\n'+d.warnings.join('\n'):'' )})});known.add(d.file);added++;
    }catch(e){errors.push(`${file.name}: ${e.message}`)}
-  }await load();setStatus(`Imported ${added}; skipped ${skipped} duplicate(s); failed ${errors.length}. Review each imported record against its PDF.`+(errors.length?'\n'+errors.join('\n'):''));
-  }catch(e){setStatus(`Import stopped: ${e.message}. ${added} record(s) were saved. Check the library before retrying.`)}
+  }const indexWarning=await finishBatch();await load();setStatus(`Imported ${added}; skipped ${skipped} duplicate(s); failed ${errors.length}. Review each imported record against its PDF.`+(errors.length?'\n'+errors.join('\n'):'')+indexWarning);
+  }catch(e){await finishBatch();setStatus(`Import stopped: ${e.message}. ${added} record(s) were saved. Check the library before retrying.`)}
   finally{importing=false;pendingFiles=[];setBusy(false);importer.disabled=false;importer.textContent='Bulk import';startButton.textContent='Import PDFs';startButton.disabled=true;$('#bulkChooseFiles').disabled=false;$('#bulkImportClose').disabled=false;$('#bulkImportCancel').disabled=false;$('#bulkImportCancel').textContent='Done';zone.setAttribute('aria-busy','false');update()}
  };
  return {update};

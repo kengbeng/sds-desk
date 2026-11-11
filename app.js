@@ -1,3 +1,4 @@
+import {initFolderTools} from './folder-tools.js';
 import {suggestedReviewDate} from './dates.js';
 import {initLibraryHealth} from './library-health.js';
 import {initExcel} from './excel.js';
@@ -165,6 +166,7 @@ function renderNotifications(items=records.filter(r=>!r.deletedAt&&['due','overd
 $('#headerNotifications').onclick=()=>{if(!('Notification'in window)||Notification.permission!=='granted'){notificationSettings();return}renderNotifications();notificationsDialog.showModal()};$('#notificationsClose').onclick=$('#notificationsDone').onclick=()=>notificationsDialog.close();$('#notificationPreferences').onclick=notificationSettings;$('#notificationsList').onclick=e=>{const b=e.target.closest('[data-record]');if(b){notificationsDialog.close();openEditor(records.find(r=>r.id===b.dataset.record))}};
 window.addEventListener('focus',()=>updateNotifications());navigator.permissions?.query({name:'notifications'}).then(p=>p.onchange=()=>updateNotifications()).catch(()=>{});
 
+initFolderTools({isBusy:()=>busy,setBusy:value=>{busy=value},load});
 initLibraryHealth({isBusy:()=>busy,setBusy:value=>{busy=value},load});
 initExcel({getCurrent:()=>sortRecords(filteredRecords(),sortPreference.key,sortPreference.direction),getAll:()=>sortRecords(records.filter(r=>!r.deletedAt),sortPreference.key,sortPreference.direction),status:r=>state(r).label,isBusy:()=>busy,getContext:scope=>[scope==='all'?'All active records':$('#filter').selectedOptions[0].textContent,scope!=='all'&&$('#search').value?'Search: '+$('#search').value:'','Sorted by '+sortOptions[sortPreference.key].label+' · '+sortDirectionLabel(sortPreference.key,sortPreference.direction)].filter(Boolean).join(' · ')});
 initInstall({isUnsafe:()=>busy||!!document.querySelector('dialog[open]:not(#installedStatus)'),setRegistration:value=>{reg=value}});
